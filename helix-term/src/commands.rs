@@ -22,8 +22,8 @@ use helix_core::{
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary, RevRopeGraphemes},
     history::UndoKind,
-    increment, indent,
-    indent::IndentStyle,
+    increment,
+    indent::{self, IndentStyle},
     line_ending::{get_line_ending_of_str, line_end_char_index},
     match_brackets,
     movement::{self, move_vertically_visual, Direction},
@@ -4205,6 +4205,7 @@ fn paste_impl(
         return;
     }
 
+    let values_len = values.len();
     let repeat = std::iter::repeat(
         // `values` is asserted to have at least one entry above.
         values
@@ -4249,7 +4250,27 @@ fn paste_impl(
             (Paste::Cursor, _) => range.cursor(text.slice(..)),
         };
 
-        let value = values.next();
+        let value =
+            if (&selection).len() == 1 {
+                /*
+                Special case:
+                If there's only one target selection, join all values with
+                newlines and use the result as the value to be inserted.
+                */
+                let line_ending = doc.line_ending.as_str();
+                Some(values.clone().take(values_len).fold(
+                    Tendril::new_const(),
+                    |mut acc, value| {
+                        if !acc.is_empty() {
+                            acc.push_str(line_ending);
+                        }
+                        acc.push_str(&value);
+                        acc
+                    },
+                ))
+            } else {
+                values.next()
+            };
 
         let value_len = value
             .as_ref()
@@ -4317,6 +4338,7 @@ fn replace_with_yanked_impl(editor: &mut Editor, register: char, count: usize) {
         return;
     };
     let values: Vec<_> = values.map(|value| value.to_string()).collect();
+    let values_len = values.len();
     let scrolloff = editor.config().scrolloff;
 
     let (view, doc) = current!(editor);
@@ -4333,7 +4355,30 @@ fn replace_with_yanked_impl(editor: &mut Editor, register: char, count: usize) {
     let selection = doc.selection(view.id);
     let transaction = Transaction::change_by_selection(doc.text(), selection, |range| {
         if !range.is_empty() {
-            (range.from(), range.to(), Some(values.next().unwrap()))
+            (
+                range.from(),
+                range.to(),
+                if selection.len() == 1 {
+                    /*
+                    Special case:
+                    If there's only one target selection, join all values with
+                    newlines and use the result as the value to be inserted.
+                    */
+                    let line_ending = doc.line_ending.as_str();
+                    Some(values.clone().take(values_len).fold(
+                        Tendril::new_const(),
+                        |mut acc, value| {
+                            if !acc.is_empty() {
+                                acc.push_str(line_ending);
+                            }
+                            acc.push_str(&value);
+                            acc
+                        },
+                    ))
+                } else {
+                    values.next()
+                },
+            )
         } else {
             (range.from(), range.to(), None)
         }
